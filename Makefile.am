@@ -112,7 +112,8 @@ libsigrok_la_SOURCES += \
 	src/scpi/scpi_vxi.c \
 	src/scpi/vxi_clnt.c \
 	src/scpi/vxi_xdr.c \
-	src/scpi/vxi.h
+	src/scpi/vxi.h \
+	src/scpi/rpc_discover.c
 endif
 if NEED_SERIAL
 libsigrok_la_SOURCES += \

@@ -20,6 +20,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#define _GNU_SOURCE
 #include <config.h>
 #include "vxi.h"
 #include <rpc/rpc.h>
@@ -27,9 +28,18 @@
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 #include "scpi.h"
+#include "rpc_discover.h"
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <ifaddrs.h>
+#include <unistd.h>
 
 #define LOG_PREFIX "scpi_vxi"
 #define VXI_DEFAULT_TIMEOUT_MS 2000
+
+/* from RPC specification (RFC1832) */
+#define RPC_PROTO_TCP 6
+#define PMAPPORT 111
 
 struct scpi_vxi {
 	char *address;
@@ -39,6 +49,117 @@ struct scpi_vxi {
 	unsigned int max_send_size;
 	unsigned int read_complete;
 };
+
+static GSList *scpi_vxi_scan(struct drv_context *drvc)
+{
+	int udp_socket_v4, udp_socket_v6, lastfd;
+	struct in6_addr rpc_mc_addr;
+	struct ifaddrs *ifap, *ifp;
+	GSList *resources = NULL;
+	char *res;
+	char buf[200];
+	size_t len = sizeof(buf);
+	struct timeval timeout = { 1, 0 };
+	fd_set fds;
+
+	sr_dbg("Start VXI-11 broadcast discovery");
+
+	if (getifaddrs(&ifap) != 0)
+		return NULL;
+
+	udp_socket_v4 = sr_rpc_create_broadcast_socket(AF_INET);
+	if (udp_socket_v4 < 0)
+		sr_err("Could not create IPv4 UDP broadcast socket");
+
+	udp_socket_v6 = sr_rpc_create_broadcast_socket(AF_INET6);
+	if (udp_socket_v6 < 0)
+		sr_err("Could not create IPv6 UDP broadcast socket");
+
+	sr_rpc_fill_getport_msg(buf, &len, DEVICE_CORE,
+		DEVICE_CORE_VERSION, RPC_PROTO_TCP);
+
+	inet_pton(AF_INET6, "FF02::202", &rpc_mc_addr);
+
+	for (ifp = ifap; ifp; ifp = ifp->ifa_next) {
+		struct iovec io;
+
+		if ((ifp->ifa_flags & (IFF_MULTICAST | IFF_BROADCAST)) == 0)
+			continue;
+
+		io.iov_base = &buf;
+		io.iov_len = len;
+
+		if (ifp->ifa_addr->sa_family == AF_INET)
+			sr_rpc_send_broadcast_ipv4(udp_socket_v4, &io,
+				ifp, PMAPPORT);
+		else if (ifp->ifa_addr->sa_family == AF_INET6)
+			sr_rpc_send_multicast_ipv6(udp_socket_v6, &io,
+				ifp, PMAPPORT, &rpc_mc_addr);
+	}
+	freeifaddrs(ifap);
+
+	FD_ZERO(&fds);
+	FD_SET(udp_socket_v4, &fds);
+	FD_SET(udp_socket_v6, &fds);
+	lastfd = udp_socket_v4 > udp_socket_v6 ?
+		 udp_socket_v4 : udp_socket_v6;
+
+	while (1) {
+		struct sockaddr_storage address;
+		struct msghdr msgh;
+		struct iovec io;
+		size_t ctlbuf[128];
+		char addrbuf[INET6_ADDRSTRLEN];
+
+		if (select(lastfd + 1, &fds, 0, 0, &timeout) == 0)
+			break;
+
+		if (!FD_ISSET(udp_socket_v4, &fds) && !FD_ISSET(udp_socket_v6, &fds))
+			continue;
+
+		io.iov_base = &buf;
+		io.iov_len = sizeof(buf);
+
+		memset(&msgh, 0, sizeof(msgh));
+		msgh.msg_name = &address;
+		msgh.msg_namelen = sizeof(address);
+		msgh.msg_iov = &io;
+		msgh.msg_iovlen = 1;
+		msgh.msg_control = ctlbuf;
+		msgh.msg_controllen = sizeof(ctlbuf);
+
+		if (FD_ISSET(udp_socket_v4, &fds))
+			len = recvmsg(udp_socket_v4, &msgh, 0);
+		else if (FD_ISSET(udp_socket_v6, &fds))
+			len = recvmsg(udp_socket_v6, &msgh, 0);
+
+		if (sr_rpc_parse_getport_response(buf, len) == 0)
+			continue;
+
+		if (address.ss_family == AF_INET) {
+			struct sockaddr_in* inaddr = (struct sockaddr_in*)(&address);
+			if (inet_ntop(AF_INET, &inaddr->sin_addr, addrbuf, INET6_ADDRSTRLEN) == 0)
+				continue;
+		}
+		if (address.ss_family == AF_INET6) {
+			struct sockaddr_in6* in6addr = (struct sockaddr_in6*)(&address);
+			if (inet_ntop(AF_INET6, &in6addr->sin6_addr, addrbuf, INET6_ADDRSTRLEN) == 0)
+				continue;
+		}
+
+		res = g_strdup_printf("vxi/%s", addrbuf);
+		resources = g_slist_append(resources, res);
+
+		sr_dbg("Got VXI-11 response from %s", addrbuf);
+	}
+
+	sr_dbg("Found %d device(s).", g_slist_length(resources));
+
+	close(udp_socket_v4);
+	close(udp_socket_v6);
+
+	return resources;
+}
 
 static int scpi_vxi_dev_inst_new(void *priv, struct drv_context *drvc,
 		const char *resource, char **params, const char *serialcomm)
@@ -222,6 +343,7 @@ SR_PRIV const struct sr_scpi_dev_inst scpi_vxi_dev = {
 	.name          = "VXI",
 	.prefix        = "vxi",
 	.priv_size     = sizeof(struct scpi_vxi),
+	.scan          = scpi_vxi_scan,
 	.dev_inst_new  = scpi_vxi_dev_inst_new,
 	.open          = scpi_vxi_open,
 	.source_add    = scpi_vxi_source_add,
