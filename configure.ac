@@ -257,6 +257,7 @@ SR_DRIVER([MIC 985xx], [mic-985xx], [libserialport])
 SR_DRIVER([Motech LPS 30x], [motech-lps-30x], [libserialport])
 SR_DRIVER([Norma DMM], [norma-dmm], [libserialport])
 SR_DRIVER([OpenBench Logic Sniffer], [openbench-logic-sniffer], [libserialport])
+SR_DRIVER([PCE PCE-322A], [pce-322a], [libserialport])
 SR_DRIVER([Pipistrello-OLS], [pipistrello-ols], [libftdi])
 SR_DRIVER([Rigol DS], [rigol-ds])
 SR_DRIVER([Saleae Logic16], [saleae-logic16], [libusb])
@@ -306,7 +307,7 @@ AC_ARG_ENABLE([java],
 sr_cxx_missing=
 
 # Check if the C++ compiler supports the C++11 standard.
-AX_CXX_COMPILE_STDCXX_11([noext], [optional])
+AX_CXX_COMPILE_STDCXX([11], [noext], [optional])
 AS_IF([test "x$HAVE_CXX11" != x1],
 	[SR_APPEND([sr_cxx_missing], [', '], ['C++11'])])
 
@@ -394,7 +395,7 @@ AS_IF([test "x$HAVE_PYMOD_NUMPY" != xyes],
 AC_CHECK_PROGS([SWIG], [swig swig3.0 swig2.0])
 AS_IF([test "x$SWIG" != x],
     AC_MSG_CHECKING([for $SWIG version])
-    [SWIG_VERSION=`$SWIG -version 2>&1 | sed -n 's/SWIG Version\s*//p'`]
+    [SWIG_VERSION=`$SWIG -version 2>&1 | sed -n 's/SWIG Version //p'`]
     AC_MSG_RESULT([$SWIG_VERSION]))
 AS_IF([test "x$SWIG" = x],
 	[SR_APPEND([sr_python_missing], [', '], [SWIG])])

@@ -306,7 +306,8 @@ SR_PRIV struct dev_context *fx2lafw_dev_new(void)
 	devc->limit_samples = 0;
 	devc->capture_ratio = 0;
 	devc->sample_wide = FALSE;
-	devc->trigger_en = FALSE;
+	devc->dslogic_continuous_mode = FALSE;
+	devc->dslogic_clock_edge = DS_EDGE_RISING;
 	devc->stl = NULL;
 
 	return devc;
@@ -330,7 +331,7 @@ static void finish_acquisition(struct sr_dev_inst *sdi)
 
 	devc = sdi->priv;
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	usb_source_remove(sdi->session, devc->ctx);
 
@@ -389,10 +390,15 @@ SR_PRIV void mso_send_data_proc(struct sr_dev_inst *sdi,
 {
 	size_t i;
 	struct dev_context *devc;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
+
+	(void)sample_width;
 
 	devc = sdi->priv;
 
-	sample_width = sample_width;
 	length /= 2;
 
 	/* Send the logic */
@@ -415,17 +421,16 @@ SR_PRIV void mso_send_data_proc(struct sr_dev_inst *sdi,
 
 	sr_session_send(sdi, &logic_packet);
 
-	const struct sr_datafeed_analog_old analog = {
-		.channels = devc->enabled_analog_channels,
-		.num_samples = length,
-		.mq = SR_MQ_VOLTAGE,
-		.unit = SR_UNIT_VOLT,
-		.mqflags = 0 /*SR_MQFLAG_DC*/,
-		.data = devc->analog_buffer
-	};
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
+	analog.meaning->channels = devc->enabled_analog_channels;
+	analog.meaning->mq = SR_MQ_VOLTAGE;
+	analog.meaning->unit = SR_UNIT_VOLT;
+	analog.meaning->mqflags = 0 /* SR_MQFLAG_DC */;
+	analog.num_samples = length;
+	analog.data = devc->analog_buffer;
 
 	const struct sr_datafeed_packet analog_packet = {
-		.type = SR_DF_ANALOG_OLD,
+		.type = SR_DF_ANALOG,
 		.payload = &analog
 	};
 
@@ -454,6 +459,7 @@ SR_PRIV void LIBUSB_CALL fx2lafw_receive_transfer(struct libusb_transfer *transf
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	gboolean packet_has_error = FALSE;
+	struct sr_datafeed_packet packet;
 	unsigned int num_samples;
 	int trigger_offset, cur_sample_count, unitsize;
 	int pre_trigger_samples;
@@ -506,8 +512,6 @@ SR_PRIV void LIBUSB_CALL fx2lafw_receive_transfer(struct libusb_transfer *transf
 	} else {
 		devc->empty_transfer_count = 0;
 	}
-	if (devc->trigger_en)
-		devc->trigger_fired = TRUE;
 	if (devc->trigger_fired) {
 		if (!devc->limit_samples || devc->sent_samples < devc->limit_samples) {
 			/* Send the incoming transfer to the session bus. */
@@ -516,9 +520,29 @@ SR_PRIV void LIBUSB_CALL fx2lafw_receive_transfer(struct libusb_transfer *transf
 			else
 				num_samples = cur_sample_count;
 
-			devc->send_data_proc(sdi, (uint8_t *)transfer->buffer,
-				num_samples * unitsize, unitsize);
-			devc->sent_samples += num_samples;
+			if (devc->dslogic && devc->trigger_pos > devc->sent_samples
+				&& devc->trigger_pos <= devc->sent_samples + num_samples) {
+					/* DSLogic trigger in this block. Send trigger position. */
+					trigger_offset = devc->trigger_pos - devc->sent_samples;
+					/* Pre-trigger samples. */
+					devc->send_data_proc(sdi, (uint8_t *)transfer->buffer,
+						trigger_offset * unitsize, unitsize);
+					devc->sent_samples += trigger_offset;
+					/* Trigger position. */
+					devc->trigger_pos = 0;
+					packet.type = SR_DF_TRIGGER;
+					packet.payload = NULL;
+					sr_session_send(sdi, &packet);
+					/* Post trigger samples. */
+					num_samples -= trigger_offset;
+					devc->send_data_proc(sdi, (uint8_t *)transfer->buffer
+							+ trigger_offset * unitsize, num_samples * unitsize, unitsize);
+					devc->sent_samples += num_samples;
+			} else {
+				devc->send_data_proc(sdi, (uint8_t *)transfer->buffer,
+					num_samples * unitsize, unitsize);
+				devc->sent_samples += num_samples;
+			}
 		}
 	} else {
 		trigger_offset = soft_trigger_logic_check(devc->stl,

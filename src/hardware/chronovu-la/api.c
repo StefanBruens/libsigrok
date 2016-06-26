@@ -21,9 +21,6 @@
 #include <config.h>
 #include "protocol.h"
 
-SR_PRIV struct sr_dev_driver chronovu_la_driver_info;
-static struct sr_dev_driver *di = &chronovu_la_driver_info;
-
 static const uint32_t drvopts[] = {
 	SR_CONF_LOGIC_ANALYZER,
 };
@@ -64,24 +61,16 @@ static int dev_clear(const struct sr_dev_driver *di)
 	return std_dev_clear(di, clear_helper);
 }
 
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
 static int add_device(int model, struct libusb_device_descriptor *des,
-	const char *serial_num, const char *connection_id,
-	libusb_device *usbdev, GSList **devices)
+	const char *serial_num, const char *connection_id, libusb_device *usbdev,
+	GSList **devices)
 {
 	int ret;
 	unsigned int i;
 	struct sr_dev_inst *sdi;
-	struct drv_context *drvc;
 	struct dev_context *devc;
 
 	ret = SR_OK;
-
-	drvc = di->context;
 
 	/* Allocate memory for our private device context. */
 	devc = g_malloc0(sizeof(struct dev_context));
@@ -117,14 +106,13 @@ static int add_device(int model, struct libusb_device_descriptor *des,
 
 	/* Register the device with libsigrok. */
 	sdi = g_malloc0(sizeof(struct sr_dev_inst));
-	sdi->status = SR_ST_INITIALIZING;
+	sdi->status = SR_ST_INACTIVE;
 	sdi->vendor = g_strdup("ChronoVu");
 	sdi->model = g_strdup(devc->prof->modelname);
 	sdi->serial_num = g_strdup(serial_num);
 	sdi->connection_id = g_strdup(connection_id);
 	sdi->conn = sr_usb_dev_inst_new(libusb_get_bus_number(usbdev),
 		libusb_get_device_address(usbdev), NULL);
-	sdi->driver = di;
 	sdi->priv = devc;
 
 	for (i = 0; i < devc->prof->num_channels; i++)
@@ -132,7 +120,6 @@ static int add_device(int model, struct libusb_device_descriptor *des,
 				cv_channel_names[i]);
 
 	*devices = g_slist_append(*devices, sdi);
-	drvc->instances = g_slist_append(drvc->instances, sdi);
 
 	if (ret == SR_OK)
 		return SR_OK;
@@ -157,7 +144,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	char product[64], serial_num[64], connection_id[64];
 
 	drvc = di->context;
-	drvc->instances = NULL;
 
 	conn = NULL;
 	for (l = options; l; l = l->next) {
@@ -242,12 +228,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	libusb_free_device_list(devlist, 1);
 	g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
+	return std_scan_complete(di, devices);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -323,11 +304,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return dev_clear(di);
-}
-
 static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
 		const struct sr_channel_group *cg)
 {
@@ -345,8 +321,9 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 		*data = g_variant_new_string(str);
 		break;
 	case SR_CONF_SAMPLERATE:
-		if (!sdi || !(devc = sdi->priv))
+		if (!sdi)
 			return SR_ERR_BUG;
+		devc = sdi->priv;
 		*data = g_variant_new_uint64(devc->cur_samplerate);
 		break;
 	default:
@@ -366,8 +343,7 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
-	if (!(devc = sdi->priv))
-		return SR_ERR_BUG;
+	devc = sdi->priv;
 
 	switch (key) {
 	case SR_CONF_SAMPLERATE:
@@ -414,8 +390,9 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 					devopts, ARRAY_SIZE(devopts), sizeof(uint32_t));
 		break;
 	case SR_CONF_SAMPLERATE:
-		if (!sdi || !sdi->priv || !(devc = sdi->priv))
+		if (!sdi)
 			return SR_ERR_BUG;
+		devc = sdi->priv;
 		cv_fill_samplerates_if_needed(sdi);
 		g_variant_builder_init(&gvb, G_VARIANT_TYPE("a{sv}"));
 		gvar = g_variant_new_fixed_array(G_VARIANT_TYPE("t"),
@@ -560,7 +537,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
 	sr_dbg("Hardware acquisition started successfully.");
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	/* Time when we should be done (for detecting trigger timeouts). */
 	devc->done = (devc->divcount + 1) * devc->prof->trigger_constant +
@@ -578,19 +555,19 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
 	sr_dbg("Stopping acquisition.");
 	sr_session_source_remove(sdi->session, -1);
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver chronovu_la_driver_info = {
+static struct sr_dev_driver chronovu_la_driver_info = {
 	.name = "chronovu-la",
 	.longname = "ChronoVu LA8/LA16",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -601,3 +578,4 @@ SR_PRIV struct sr_dev_driver chronovu_la_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(chronovu_la_driver_info);

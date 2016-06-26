@@ -74,8 +74,6 @@ static const uint64_t vdivs[][2] = {
 	VDIV_VALUES
 };
 
-SR_PRIV struct sr_dev_driver hantek_6xxx_driver_info;
-
 static int read_channel(const struct sr_dev_inst *sdi, uint32_t amount);
 
 static int dev_acquisition_stop(struct sr_dev_inst *sdi);
@@ -85,7 +83,6 @@ static struct sr_dev_inst *hantek_6xxx_dev_new(const struct hantek_6xxx_profile 
 	struct sr_dev_inst *sdi;
 	struct sr_channel *ch;
 	struct sr_channel_group *cg;
-	struct drv_context *drvc;
 	struct dev_context *devc;
 	unsigned int i;
 
@@ -93,7 +90,6 @@ static struct sr_dev_inst *hantek_6xxx_dev_new(const struct hantek_6xxx_profile 
 	sdi->status = SR_ST_INITIALIZING;
 	sdi->vendor = g_strdup(prof->vendor);
 	sdi->model = g_strdup(prof->model);
-	sdi->driver = &hantek_6xxx_driver_info;
 
 	for (i = 0; i < ARRAY_SIZE(channel_names); i++) {
 		ch = sr_channel_new(sdi, i, SR_CHANNEL_ANALOG, TRUE, channel_names[i]);
@@ -120,8 +116,6 @@ static struct sr_dev_inst *hantek_6xxx_dev_new(const struct hantek_6xxx_profile 
 	devc->samplerate = DEFAULT_SAMPLERATE;
 
 	sdi->priv = devc;
-	drvc = sdi->driver->context;
-	drvc->instances = g_slist_append(drvc->instances, sdi);
 
 	return sdi;
 }
@@ -161,11 +155,6 @@ static void clear_dev_context(void *priv)
 static int dev_clear(const struct sr_dev_driver *di)
 {
 	return std_dev_clear(di, clear_dev_context);
-}
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
 }
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
@@ -264,12 +253,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	}
 	libusb_free_device_list(devlist, 1);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
+	return std_scan_complete(di, devices);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -326,11 +310,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	hantek_6xxx_close(sdi);
 
 	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return dev_clear(di);
 }
 
 static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
@@ -563,7 +542,10 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 		int num_samples)
 {
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct dev_context *devc = sdi->priv;
 	int num_channels, data_offset, i;
 
@@ -575,15 +557,17 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 	const gboolean ch1_ena = !!devc->ch_enabled[0];
 	const gboolean ch2_ena = !!devc->ch_enabled[1];
 
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
+
 	num_channels = (ch1_ena && ch2_ena) ? 2 : 1;
-	packet.type = SR_DF_ANALOG_OLD;
+	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
 
-	analog.channels = devc->enabled_channels;
+	analog.meaning->channels = devc->enabled_channels;
 	analog.num_samples = num_samples;
-	analog.mq = SR_MQ_VOLTAGE;
-	analog.unit = SR_UNIT_VOLT;
-	analog.mqflags = 0;
+	analog.meaning->mq = SR_MQ_VOLTAGE;
+	analog.meaning->unit = SR_UNIT_VOLT;
+	analog.meaning->mqflags = 0;
 
 	analog.data = g_try_malloc(analog.num_samples * sizeof(float) * num_channels);
 	if (!analog.data) {
@@ -606,9 +590,9 @@ static void send_chunk(struct sr_dev_inst *sdi, unsigned char *buf,
 		 * represents 5V peak-to-peak where 0 = -2.5V and 255 = +2.5V.
 		 */
 		if (ch1_ena)
-			analog.data[data_offset++] = (ch1_bit * *(buf + i * 2) - ch1_center);
+			((float *)analog.data)[data_offset++] = (ch1_bit * *(buf + i * 2) - ch1_center);
 		if (ch2_ena)
-			analog.data[data_offset++] = (ch2_bit * *(buf + i * 2 + 1) - ch2_center);
+			((float *)analog.data)[data_offset++] = (ch2_bit * *(buf + i * 2 + 1) - ch2_center);
 	}
 
 	sr_session_send(sdi, &packet);
@@ -760,7 +744,7 @@ static int handle_event(int fd, int revents, void *cb_data)
 		 */
 		usb_source_remove(sdi->session, drvc->sr_ctx);
 
-		std_session_send_df_end(sdi, LOG_PREFIX);
+		std_session_send_df_end(sdi);
 
 		devc->dev_state = IDLE;
 
@@ -789,7 +773,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	if (hantek_6xxx_init(sdi) != SR_OK)
 		return SR_ERR;
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	devc->samp_received = 0;
 	devc->dev_state = FLUSH;
@@ -819,14 +803,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver hantek_6xxx_driver_info = {
+static struct sr_dev_driver hantek_6xxx_driver_info = {
 	.name = "hantek-6xxx",
 	.longname = "Hantek 6xxx",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -837,3 +821,4 @@ SR_PRIV struct sr_dev_driver hantek_6xxx_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(hantek_6xxx_driver_info);

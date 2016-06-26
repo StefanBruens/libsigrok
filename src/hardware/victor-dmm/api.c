@@ -31,8 +31,6 @@
 #define VICTOR_VENDOR "Victor"
 #define VICTOR_INTERFACE 0
 #define VICTOR_ENDPOINT (LIBUSB_ENDPOINT_IN | 1)
-
-SR_PRIV struct sr_dev_driver victor_dmm_driver_info;
 static int dev_acquisition_stop(struct sr_dev_inst *sdi);
 
 static const uint32_t drvopts[] = {
@@ -49,11 +47,6 @@ static const uint32_t devopts[] = {
 	SR_CONF_LIMIT_MSEC | SR_CONF_SET,
 	SR_CONF_CONN | SR_CONF_GET,
 };
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
@@ -83,9 +76,9 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		sdi = g_malloc0(sizeof(struct sr_dev_inst));
 		sdi->status = SR_ST_INACTIVE;
 		sdi->vendor = g_strdup(VICTOR_VENDOR);
-		sdi->driver = di;
 		sdi->connection_id = g_strdup(connection_id);
 		devc = g_malloc0(sizeof(struct dev_context));
+		sr_sw_limits_init(&devc->limits);
 		sdi->priv = devc;
 
 		sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "P1");
@@ -93,17 +86,11 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 				libusb_get_device_address(devlist[i]), NULL);
 		sdi->inst_type = SR_INST_USB;
 
-		drvc->instances = g_slist_append(drvc->instances, sdi);
 		devices = g_slist_append(devices, sdi);
 	}
 	libusb_free_device_list(devlist, 1);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
+	return std_scan_complete(di, devices);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -111,33 +98,13 @@ static int dev_open(struct sr_dev_inst *sdi)
 	struct sr_dev_driver *di = sdi->driver;
 	struct drv_context *drvc = di->context;
 	struct sr_usb_dev_inst *usb;
-	libusb_device **devlist;
-	int ret, i;
-	char connection_id[64];
-
-	if (!di->context) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
+	int ret;
 
 	usb = sdi->conn;
 
-	libusb_get_device_list(drvc->sr_ctx->libusb_ctx, &devlist);
-	for (i = 0; devlist[i]; i++) {
-		usb_get_port_path(devlist[i], connection_id, sizeof(connection_id));
-		if (strcmp(sdi->connection_id, connection_id))
-			continue;
-		if ((ret = libusb_open(devlist[i], &usb->devhdl))) {
-			sr_err("Failed to open device: %s.", libusb_error_name(ret));
-			return SR_ERR;
-		}
-		break;
-	}
-	libusb_free_device_list(devlist, 1);
-	if (!devlist[i]) {
-		sr_err("Device not found.");
-		return SR_ERR;
-	}
+	ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb);
+	if (ret != SR_OK)
+		return ret;
 
 	/* The device reports as HID class, so the kernel would have
 	 * claimed it. */
@@ -161,13 +128,7 @@ static int dev_open(struct sr_dev_inst *sdi)
 
 static int dev_close(struct sr_dev_inst *sdi)
 {
-	struct sr_dev_driver *di = sdi->driver;
 	struct sr_usb_dev_inst *usb;
-
-	if (!di->context) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
 
 	usb = sdi->conn;
 
@@ -183,24 +144,10 @@ static int dev_close(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int cleanup(const struct sr_dev_driver *di)
-{
-	int ret;
-	struct drv_context *drvc;
-
-	if (!(drvc = di->context))
-		/* Can get called on an unused driver, doesn't matter. */
-		return SR_OK;
-
-	ret = std_dev_clear(di, NULL);
-	g_free(drvc);
-
-	return ret;
-}
-
 static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
 		const struct sr_channel_group *cg)
 {
+	struct dev_context *devc = sdi->priv;
 	struct sr_usb_dev_inst *usb;
 	char str[128];
 
@@ -214,6 +161,9 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 		snprintf(str, 128, "%d.%d", usb->bus, usb->address);
 		*data = g_variant_new_string(str);
 		break;
+	case SR_CONF_LIMIT_SAMPLES:
+	case SR_CONF_LIMIT_MSEC:
+		return sr_sw_limits_config_get(&devc->limits, key, data);
 	default:
 		return SR_ERR_NA;
 	}
@@ -224,36 +174,16 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sdi,
 		const struct sr_channel_group *cg)
 {
-	struct sr_dev_driver *di = sdi->driver;
 	struct dev_context *devc;
-	gint64 now;
 
 	(void)cg;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
-	if (!di->context) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
-
 	devc = sdi->priv;
 
-	switch (key) {
-	case SR_CONF_LIMIT_MSEC:
-		devc->limit_msec = g_variant_get_uint64(data);
-		now = g_get_monotonic_time() / 1000;
-		devc->end_time = now + devc->limit_msec;
-		break;
-	case SR_CONF_LIMIT_SAMPLES:
-		devc->limit_samples = g_variant_get_uint64(data);
-		break;
-	default:
-		return SR_ERR_NA;
-	}
-
-	return SR_OK;
+	return sr_sw_limits_config_set(&devc->limits, key, data);
 }
 
 static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
@@ -297,10 +227,8 @@ static void LIBUSB_CALL receive_transfer(struct libusb_transfer *transfer)
 		sr_dbg("Got %d-byte packet.", transfer->actual_length);
 		if (transfer->actual_length == DMM_DATA_SIZE) {
 			victor_dmm_receive_data(sdi, transfer->buffer);
-			if (devc->limit_samples) {
-				if (devc->num_samples >= devc->limit_samples)
-					dev_acquisition_stop(sdi);
-			}
+			if (sr_sw_limits_check(&devc->limits))
+				dev_acquisition_stop(sdi);
 		}
 	}
 	/* Anything else is either an error or a timeout, which is fine:
@@ -330,7 +258,6 @@ static int handle_events(int fd, int revents, void *cb_data)
 	struct sr_dev_inst *sdi;
 	struct sr_dev_driver *di;
 	struct timeval tv;
-	gint64 now;
 
 	(void)fd;
 	(void)revents;
@@ -340,16 +267,13 @@ static int handle_events(int fd, int revents, void *cb_data)
 	di = sdi->driver;
 	drvc = di->context;
 
-	if (devc->limit_msec) {
-		now = g_get_monotonic_time() / 1000;
-		if (now > devc->end_time)
-			dev_acquisition_stop(sdi);
-	}
+	if (sr_sw_limits_check(&devc->limits))
+		dev_acquisition_stop(sdi);
 
 	if (sdi->status == SR_ST_STOPPING) {
 		usb_source_remove(sdi->session, drvc->sr_ctx);
 		dev_close(sdi);
-		std_session_send_df_end(sdi, LOG_PREFIX);
+		std_session_send_df_end(sdi);
 	}
 
 	memset(&tv, 0, sizeof(struct timeval));
@@ -371,14 +295,9 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
-	if (!di->context) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
-
 	usb = sdi->conn;
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	usb_source_add(sdi->session, drvc->sr_ctx, 100,
 			handle_events, (void *)sdi);
@@ -404,13 +323,6 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
-	struct sr_dev_driver *di = sdi->driver;
-
-	if (!di->context) {
-		sr_err("Driver was not initialized.");
-		return SR_ERR;
-	}
-
 	if (sdi->status != SR_ST_ACTIVE) {
 		sr_err("Device not active, can't stop acquisition.");
 		return SR_ERR;
@@ -421,14 +333,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver victor_dmm_driver_info = {
+static struct sr_dev_driver victor_dmm_driver_info = {
 	.name = "victor-dmm",
 	.longname = "Victor DMMs",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = NULL,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -439,3 +351,4 @@ SR_PRIV struct sr_dev_driver victor_dmm_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(victor_dmm_driver_info);

@@ -128,19 +128,23 @@ SR_PRIV const char *maynuo_m97_mode_to_str(enum maynuo_m97_mode mode)
 static void maynuo_m97_session_send_value(const struct sr_dev_inst *sdi, struct sr_channel *ch, float value, enum sr_mq mq, enum sr_unit unit)
 {
 	struct sr_datafeed_packet packet;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 
-	analog.channels = g_slist_append(NULL, ch);
+	sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
+	analog.meaning->channels = g_slist_append(NULL, ch);
 	analog.num_samples = 1;
 	analog.data = &value;
-	analog.mq = mq;
-	analog.unit = unit;
-	analog.mqflags = SR_MQFLAG_DC;
+	analog.meaning->mq = mq;
+	analog.meaning->unit = unit;
+	analog.meaning->mqflags = SR_MQFLAG_DC;
 
-	packet.type = SR_DF_ANALOG_OLD;
+	packet.type = SR_DF_ANALOG;
 	packet.payload = &analog;
 	sr_session_send(sdi, &packet);
-	g_slist_free(analog.channels);
+	g_slist_free(analog.meaning->channels);
 }
 
 SR_PRIV int maynuo_m97_capture_start(const struct sr_dev_inst *sdi)
@@ -164,7 +168,6 @@ SR_PRIV int maynuo_m97_receive_data(int fd, int revents, void *cb_data)
 	struct sr_modbus_dev_inst *modbus;
 	struct sr_datafeed_packet packet;
 	uint16_t registers[4];
-	int64_t t;
 
 	(void)fd;
 	(void)revents;
@@ -189,22 +192,12 @@ SR_PRIV int maynuo_m97_receive_data(int fd, int revents, void *cb_data)
 
 		packet.type = SR_DF_FRAME_END;
 		sr_session_send(sdi, &packet);
-		devc->num_samples++;
+		sr_sw_limits_update_samples_read(&devc->limits, 1);
 	}
 
-	if (devc->limit_samples && (devc->num_samples >= devc->limit_samples)) {
-		sr_info("Requested number of samples reached.");
+	if (sr_sw_limits_check(&devc->limits)) {
 		sdi->driver->dev_acquisition_stop(sdi);
 		return TRUE;
-	}
-
-	if (devc->limit_msec) {
-		t = (g_get_monotonic_time() - devc->starttime) / 1000;
-		if (t > (int64_t)devc->limit_msec) {
-			sr_info("Requested time limit reached.");
-			sdi->driver->dev_acquisition_stop(sdi);
-			return TRUE;
-		}
 	}
 
 	maynuo_m97_capture_start(sdi);

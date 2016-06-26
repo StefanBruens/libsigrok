@@ -21,8 +21,6 @@
 #include "protocol.h"
 #include "beaglelogic.h"
 
-SR_PRIV struct sr_dev_driver beaglelogic_driver_info;
-
 /* Scan options */
 static const uint32_t scanopts[] = {
 	SR_CONF_NUM_LOGIC_CHANNELS,
@@ -60,11 +58,6 @@ static const uint64_t samplerates[] = {
 	SR_HZ(1),
 };
 
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
 static struct dev_context *beaglelogic_devc_alloc(void)
 {
 	struct dev_context *devc;
@@ -80,16 +73,11 @@ static struct dev_context *beaglelogic_devc_alloc(void)
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	struct drv_context *drvc;
-	GSList *devices, *l;
+	GSList *l;
 	struct sr_config *src;
 	struct sr_dev_inst *sdi;
 	struct dev_context *devc;
 	int i, maxch;
-
-	devices = NULL;
-	drvc = di->context;
-	drvc->instances = NULL;
 
 	/* Probe for /dev/beaglelogic */
 	if (!g_file_test(BEAGLELOGIC_DEV_NODE, G_FILE_TEST_EXISTS))
@@ -99,7 +87,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	sdi->status = SR_ST_INACTIVE;
 	sdi->model = g_strdup("BeagleLogic");
 	sdi->version = g_strdup("1.0");
-	sdi->driver = di;
 
 	/* Unless explicitly specified, keep max channels to 8 only */
 	maxch = 8;
@@ -139,20 +126,8 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 				channel_names[i]);
 
 	sdi->priv = devc;
-	drvc->instances = g_slist_append(drvc->instances, sdi);
-	devices = g_slist_append(devices, sdi);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
-}
-
-static int dev_clear(const struct sr_dev_driver *di)
-{
-	return std_dev_clear(di, NULL);
+	return std_scan_complete(di, g_slist_append(NULL, sdi));
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
@@ -197,29 +172,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 		beaglelogic_close(devc);
 	}
 	sdi->status = SR_ST_INACTIVE;
-	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	struct drv_context *drvc;
-	struct sr_dev_inst *sdi;
-	GSList *l;
-
-	/* unused driver */
-	if (!(drvc = di->context))
-		return SR_OK;
-
-	/* Clean up the instances */
-	for (l = drvc->instances; l; l = l->next) {
-		sdi = l->data;
-		di->dev_close(sdi);
-		g_free(sdi->priv);
-		sr_dev_inst_free(sdi);
-	}
-	g_slist_free(drvc->instances);
-	drvc->instances = NULL;
-
 	return SR_OK;
 }
 
@@ -365,7 +317,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		devc->trigger_fired = FALSE;
 	} else
 		devc->trigger_fired = TRUE;
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	/* Trigger and add poll on file */
 	beaglelogic_start(devc);
@@ -391,20 +343,19 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 
 	/* Remove session source and send EOT packet */
 	sr_session_source_remove_pollfd(sdi->session, &devc->pollfd);
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver beaglelogic_driver_info = {
+static struct sr_dev_driver beaglelogic_driver_info = {
 	.name = "beaglelogic",
 	.longname = "BeagleLogic",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
-	.dev_clear = dev_clear,
+	.dev_list = std_dev_list,
 	.config_get = config_get,
 	.config_set = config_set,
 	.config_list = config_list,
@@ -414,3 +365,4 @@ SR_PRIV struct sr_dev_driver beaglelogic_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(beaglelogic_driver_info);

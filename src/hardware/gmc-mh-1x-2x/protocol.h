@@ -87,16 +87,15 @@ struct dev_context {
 	enum model model;	/**< Model code. */
 
 	/* Acquisition settings */
-	uint64_t limit_samples;	/**< Target number of samples */
-	uint64_t limit_msec;	/**< Target sampling time */
+	struct sr_sw_limits limits;
 
 	/* Operational state */
 	gboolean settings_ok;	/**< Settings msg received yet. */
 	int msg_type;       /**< Message type (MSGID_INF, ...). */
 	int msg_len;        /**< Message length (valid when msg, curr. type known).*/
-	int mq;             /**< Measured quantity */
-	int unit;           /**< Measured unit */
-	uint64_t mqflags;	/**< Measured quantity flags */
+	enum sr_mq mq;      /**< Measured quantity */
+	enum sr_unit unit;  /**< Measured unit */
+	enum sr_mqflag mqflags;	/**< Measured quantity flags */
 	float value;		/**< Measured value */
 	float scale;		/**< Scale for value. */
 	int8_t scale1000;   /**< Additional scale factor 1000x. */
@@ -111,8 +110,6 @@ struct dev_context {
 	gboolean response_pending; /**< Request sent, response is pending. */
 
 	/* Temporary state across callbacks */
-	uint64_t num_samples;	/**< Current #samples for limit_samples */
-	GTimer *elapsed_msec;	/**< Used for sampling with limit_msec  */
 	uint8_t buf[GMC_BUFSIZE];	/**< Buffer for read callback */
 	int buflen;			/**< Data len in buf */
 };

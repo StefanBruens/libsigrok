@@ -249,7 +249,7 @@ static const struct rigol_ds_model supported_models[] = {
 	{SERIES(DS1000Z), "MSO1104Z-S", {5, 1000000000}, 4, true},
 };
 
-SR_PRIV struct sr_dev_driver rigol_ds_driver_info;
+static struct sr_dev_driver rigol_ds_driver_info;
 
 static void clear_helper(void *priv)
 {
@@ -270,11 +270,6 @@ static void clear_helper(void *priv)
 static int dev_clear(const struct sr_dev_driver *di)
 {
 	return std_dev_clear(di, clear_helper);
-}
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
 }
 
 static struct sr_dev_inst *probe_device(struct sr_scpi_dev_inst *scpi)
@@ -411,11 +406,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	return sr_scpi_scan(di->context, options, probe_device);
 }
 
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
-}
-
 static int dev_open(struct sr_dev_inst *sdi)
 {
 	int ret;
@@ -457,11 +447,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	}
 
 	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return dev_clear(di);
 }
 
 static int analog_frame_size(const struct sr_dev_inst *sdi)
@@ -516,8 +501,10 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 	int idx = -1;
 	unsigned i;
 
-	if (!sdi || !(devc = sdi->priv))
+	if (!sdi)
 		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	/* If a channel group is specified, it must be a valid one. */
 	if (cg && !g_slist_find(sdi->channel_groups, cg)) {
@@ -647,8 +634,7 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	const char *tmp_str;
 	char buffer[16];
 
-	if (!(devc = sdi->priv))
-		return SR_ERR_ARG;
+	devc = sdi->priv;
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
@@ -819,8 +805,9 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	}
 
 	/* Every other option requires a valid device instance. */
-	if (!sdi || !(devc = sdi->priv))
+	if (!sdi)
 		return SR_ERR_ARG;
+	devc = sdi->priv;
 
 	/* If a channel group is specified, it must be a valid one. */
 	if (cg && !g_slist_find(sdi->channel_groups, cg)) {
@@ -1031,7 +1018,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	sr_scpi_source_add(sdi->session, scpi, G_IO_IN, 50,
 			rigol_ds_receive, (void *)sdi);
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	devc->channel_entry = devc->enabled_channels;
 
@@ -1057,7 +1044,7 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	g_slist_free(devc->enabled_channels);
 	devc->enabled_channels = NULL;
@@ -1067,14 +1054,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver rigol_ds_driver_info = {
+static struct sr_dev_driver rigol_ds_driver_info = {
 	.name = "rigol-ds",
 	.longname = "Rigol DS",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -1085,3 +1072,4 @@ SR_PRIV struct sr_dev_driver rigol_ds_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(rigol_ds_driver_info);

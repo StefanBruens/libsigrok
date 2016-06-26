@@ -24,7 +24,7 @@
 
 #define SERIALCOMM "115200/8n1/flow=1"
 
-SR_PRIV struct sr_dev_driver hameg_hmo_driver_info;
+static struct sr_dev_driver hameg_hmo_driver_info;
 
 static const char *manufacturers[] = {
 	"HAMEG",
@@ -46,11 +46,6 @@ enum {
 	CG_ANALOG,
 	CG_DIGITAL,
 };
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
 
 static int check_manufacturer(const char *manufacturer)
 {
@@ -117,11 +112,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	return sr_scpi_scan(di->context, options, hmo_probe_serial_device);
 }
 
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
-}
-
 static void clear_helper(void *priv)
 {
 	struct dev_context *devc;
@@ -166,13 +156,6 @@ static int dev_close(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int cleanup(const struct sr_dev_driver *di)
-{
-	dev_clear(di);
-
-	return SR_OK;
-}
-
 static int check_channel_group(struct dev_context *devc,
 			     const struct sr_channel_group *cg)
 {
@@ -206,8 +189,10 @@ static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *s
 	const struct scope_config *model;
 	struct scope_state *state;
 
-	if (!sdi || !(devc = sdi->priv))
+	if (!sdi)
 		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	if ((cg_type = check_channel_group(devc, cg)) == CG_INVALID)
 		return SR_ERR;
@@ -335,8 +320,10 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	double tmp_d;
 	gboolean update_sample_rate;
 
-	if (!sdi || !(devc = sdi->priv))
+	if (!sdi)
 		return SR_ERR_ARG;
+
+	devc = sdi->priv;
 
 	if ((cg_type = check_channel_group(devc, cg)) == CG_INVALID)
 		return SR_ERR;
@@ -500,7 +487,8 @@ static int config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *
 	struct dev_context *devc = NULL;
 	const struct scope_config *model = NULL;
 
-	if (sdi && (devc = sdi->priv)) {
+	if (sdi) {
+		devc = sdi->priv;
 		if ((cg_type = check_channel_group(devc, cg)) == CG_INVALID)
 			return SR_ERR;
 
@@ -757,7 +745,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	sr_scpi_source_add(sdi->session, scpi, G_IO_IN, 50,
 			hmo_receive_data, (void *)sdi);
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	devc->current_channel = devc->enabled_channels;
 
@@ -769,7 +757,7 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 	struct dev_context *devc;
 	struct sr_scpi_dev_inst *scpi;
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
@@ -785,14 +773,14 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver hameg_hmo_driver_info = {
+static struct sr_dev_driver hameg_hmo_driver_info = {
 	.name = "hameg-hmo",
 	.longname = "Hameg HMO",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -803,3 +791,4 @@ SR_PRIV struct sr_dev_driver hameg_hmo_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(hameg_hmo_driver_info);

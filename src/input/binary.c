@@ -75,7 +75,7 @@ static int process_buffer(struct sr_input *in)
 
 	inc = in->priv;
 	if (!inc->started) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 
 		if (inc->samplerate) {
 			packet.type = SR_DF_META;
@@ -137,9 +137,19 @@ static int end(struct sr_input *in)
 
 	inc = in->priv;
 	if (inc->started)
-		std_session_send_df_end(in->sdi, LOG_PREFIX);
+		std_session_send_df_end(in->sdi);
 
 	return ret;
+}
+
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	inc->started = FALSE;
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
 }
 
 static struct sr_option options[] = {
@@ -167,4 +177,5 @@ SR_PRIV struct sr_input_module input_binary = {
 	.init = init,
 	.receive = receive,
 	.end = end,
+	.reset = reset,
 };

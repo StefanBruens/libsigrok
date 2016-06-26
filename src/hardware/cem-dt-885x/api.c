@@ -35,7 +35,7 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
 	SR_CONF_SPL_WEIGHT_FREQ | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_SPL_WEIGHT_TIME | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
@@ -69,16 +69,8 @@ static const char *data_sources[] = {
 	"Memory",
 };
 
-SR_PRIV struct sr_dev_driver cem_dt_885x_driver_info;
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
-	struct drv_context *drvc;
 	struct dev_context *devc;
 	struct sr_config *src;
 	struct sr_serial_dev_inst *serial;
@@ -103,7 +95,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 		return NULL;
 
 	devices = NULL;
-	drvc = di->context;
 	start = g_get_monotonic_time();
 	while (g_get_monotonic_time() - start < MAX_SCAN_TIME_US) {
 		if (serial_read_nonblocking(serial, &c, 1) == 1 && c == 0xa5) {
@@ -121,9 +112,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 			sdi->conn = sr_serial_dev_inst_new(conn, SERIALCOMM);
 			sdi->inst_type = SR_INST_SERIAL;
 			sdi->priv = devc;
-			sdi->driver = di;
 			sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "SPL");
-			drvc->instances = g_slist_append(drvc->instances, sdi);
 			devices = g_slist_append(devices, sdi);
 			break;
 		}
@@ -133,17 +122,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
 	serial_close(serial);
 
-	return devices;
-}
-
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	return std_dev_clear(di, NULL);
+	return std_scan_complete(di, devices);
 }
 
 static int config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi,
@@ -232,10 +211,7 @@ static int config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sd
 	if (sdi->status != SR_ST_ACTIVE)
 		return SR_ERR_DEV_CLOSED;
 
-	if (!(devc = sdi->priv)) {
-		sr_err("sdi->priv was NULL.");
-		return SR_ERR_BUG;
-	}
+	devc = sdi->priv;
 
 	ret = SR_OK;
 	switch (key) {
@@ -378,7 +354,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	devc->num_samples = 0;
 	devc->buf_len = 0;
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	/* Poll every 100ms, or whenever some data comes in. */
 	serial = sdi->conn;
@@ -388,23 +364,14 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	return SR_OK;
 }
 
-static int dev_acquisition_stop(struct sr_dev_inst *sdi)
-{
-	if (sdi->status != SR_ST_ACTIVE)
-		return SR_ERR_DEV_CLOSED;
-
-	return std_serial_dev_acquisition_stop(sdi, std_serial_dev_close,
-			sdi->conn, LOG_PREFIX);
-}
-
-SR_PRIV struct sr_dev_driver cem_dt_885x_driver_info = {
+static struct sr_dev_driver cem_dt_885x_driver_info = {
 	.name = "cem-dt-885x",
 	.longname = "CEM DT-885x",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = NULL,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -412,6 +379,7 @@ SR_PRIV struct sr_dev_driver cem_dt_885x_driver_info = {
 	.dev_open = std_serial_dev_open,
 	.dev_close = std_serial_dev_close,
 	.dev_acquisition_start = dev_acquisition_start,
-	.dev_acquisition_stop = dev_acquisition_stop,
+	.dev_acquisition_stop = std_serial_dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(cem_dt_885x_driver_info);

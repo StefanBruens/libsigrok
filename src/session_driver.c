@@ -66,7 +66,10 @@ static gboolean stream_session_data(struct sr_dev_inst *sdi)
 	struct session_vdev *vdev;
 	struct sr_datafeed_packet packet;
 	struct sr_datafeed_logic logic;
-	struct sr_datafeed_analog_old analog;
+	struct sr_datafeed_analog analog;
+	struct sr_analog_encoding encoding;
+	struct sr_analog_meaning meaning;
+	struct sr_analog_spec spec;
 	struct zip_stat zs;
 	int ret, got_data;
 	char capturefile[16];
@@ -137,15 +140,16 @@ static gboolean stream_session_data(struct sr_dev_inst *sdi)
 	if (ret > 0) {
 		got_data = TRUE;
 		if (vdev->cur_analog_channel != 0) {
-			packet.type = SR_DF_ANALOG_OLD;
+			packet.type = SR_DF_ANALOG;
 			packet.payload = &analog;
-			analog.channels = g_slist_prepend(NULL,
+			sr_analog_init(&analog, &encoding, &meaning, &spec, 0);
+			analog.meaning->channels = g_slist_prepend(NULL,
 					g_array_index(vdev->analog_channels,
 						struct sr_channel *, vdev->cur_analog_channel - 1));
 			analog.num_samples = ret / sizeof(float);
-			analog.mq = SR_MQ_VOLTAGE;
-			analog.unit = SR_UNIT_VOLT;
-			analog.mqflags = SR_MQFLAG_DC;
+			analog.meaning->mq = SR_MQ_VOLTAGE;
+			analog.meaning->unit = SR_UNIT_VOLT;
+			analog.meaning->mqflags = SR_MQFLAG_DC;
 			analog.data = (float *) buf;
 		} else {
 			if (ret % vdev->unitsize != 0)
@@ -199,17 +203,12 @@ static int receive_data(int fd, int revents, void *cb_data)
 		vdev->archive = NULL;
 	}
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	return G_SOURCE_REMOVE;
 }
 
 /* driver callbacks */
-
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
 
 static int dev_clear(const struct sr_dev_driver *di)
 {
@@ -365,7 +364,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		return SR_ERR;
 	}
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	/* freewheeling source */
 	sr_session_source_add(sdi->session, -1, 0, 0, receive_data, (void *)sdi);
@@ -389,7 +388,7 @@ SR_PRIV struct sr_dev_driver session_driver = {
 	.name = "virtual-session",
 	.longname = "Session-emulating driver",
 	.api_version = 1,
-	.init = init,
+	.init = std_init,
 	.cleanup = dev_clear,
 	.scan = NULL,
 	.dev_list = NULL,

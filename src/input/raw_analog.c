@@ -151,7 +151,7 @@ static int process_buffer(struct sr_input *in)
 
 	inc = in->priv;
 	if (!inc->started) {
-		std_session_send_df_header(in->sdi, LOG_PREFIX);
+		std_session_send_df_header(in->sdi);
 
 		if (inc->samplerate) {
 			packet.type = SR_DF_META;
@@ -227,7 +227,7 @@ static int end(struct sr_input *in)
 
 	inc = in->priv;
 	if (inc->started)
-		std_session_send_df_end(in->sdi, LOG_PREFIX);
+		std_session_send_df_end(in->sdi);
 
 	return ret;
 }
@@ -267,6 +267,17 @@ static void cleanup(struct sr_input *in)
 	in->priv = NULL;
 }
 
+static int reset(struct sr_input *in)
+{
+	struct context *inc = in->priv;
+
+	cleanup(in);
+	inc->started = FALSE;
+	g_string_truncate(in->buf, 0);
+
+	return SR_OK;
+}
+
 SR_PRIV struct sr_input_module input_raw_analog = {
 	.id = "raw_analog",
 	.name = "RAW analog",
@@ -277,4 +288,5 @@ SR_PRIV struct sr_input_module input_raw_analog = {
 	.receive = receive,
 	.end = end,
 	.cleanup = cleanup,
+	.reset = reset,
 };

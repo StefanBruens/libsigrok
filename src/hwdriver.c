@@ -199,7 +199,7 @@ static struct sr_key_info sr_key_info_config[] = {
 		"Sample limit", NULL},
 	{SR_CONF_LIMIT_FRAMES, SR_T_UINT64, "limit_frames",
 		"Frame limit", NULL},
-	{SR_CONF_CONTINUOUS, SR_T_UINT64, "continuous",
+	{SR_CONF_CONTINUOUS, SR_T_BOOL, "continuous",
 		"Continuous sampling", NULL},
 	{SR_CONF_DATALOG, SR_T_BOOL, "datalog",
 		"Datalog", NULL},
@@ -672,10 +672,11 @@ static int check_key(const struct sr_dev_driver *driver,
 /**
  * Query value of a configuration key at the given driver or device instance.
  *
- * @param[in] driver The sr_dev_driver struct to query.
+ * @param[in] driver The sr_dev_driver struct to query. Must not be NULL.
  * @param[in] sdi (optional) If the key is specific to a device, this must
  *            contain a pointer to the struct sr_dev_inst to be checked.
- *            Otherwise it must be NULL.
+ *            Otherwise it must be NULL. If sdi is != NULL, sdi->priv must
+ *            also be != NULL.
  * @param[in] cg The channel group on the device for which to list the
  *                    values, or NULL.
  * @param[in] key The configuration key (SR_CONF_*).
@@ -709,6 +710,11 @@ SR_API int sr_config_get(const struct sr_dev_driver *driver,
 	if (check_key(driver, sdi, cg, key, SR_CONF_GET, NULL) != SR_OK)
 		return SR_ERR_ARG;
 
+	if (sdi && !sdi->priv) {
+		sr_err("Can't get config (sdi != NULL, sdi->priv == NULL).");
+		return SR_ERR;
+	}
+
 	if ((ret = driver->config_get(key, data, sdi, cg)) == SR_OK) {
 		log_key(sdi, cg, key, SR_CONF_GET, *data);
 		/* Got a floating reference from the driver. Sink it here,
@@ -722,7 +728,8 @@ SR_API int sr_config_get(const struct sr_dev_driver *driver,
 /**
  * Set value of a configuration key in a device instance.
  *
- * @param[in] sdi The device instance.
+ * @param[in] sdi The device instance. Must not be NULL. sdi->driver and
+ *                sdi->priv must not be NULL either.
  * @param[in] cg The channel group on the device for which to list the
  *                    values, or NULL.
  * @param[in] key The configuration key (SR_CONF_*).
@@ -746,7 +753,7 @@ SR_API int sr_config_set(const struct sr_dev_inst *sdi,
 
 	g_variant_ref_sink(data);
 
-	if (!sdi || !sdi->driver || !data)
+	if (!sdi || !sdi->driver || !sdi->priv || !data)
 		ret = SR_ERR;
 	else if (!sdi->driver->config_set)
 		ret = SR_ERR_ARG;
@@ -788,9 +795,11 @@ SR_API int sr_config_commit(const struct sr_dev_inst *sdi)
 /**
  * List all possible values for a configuration key.
  *
- * @param[in] driver The sr_dev_driver struct to query.
+ * @param[in] driver The sr_dev_driver struct to query. Must not be NULL.
  * @param[in] sdi (optional) If the key is specific to a device, this must
  *            contain a pointer to the struct sr_dev_inst to be checked.
+ *            Otherwise it must be NULL. If sdi is != NULL, sdi->priv must
+ *            also be != NULL.
  * @param[in] cg The channel group on the device for which to list the
  *                    values, or NULL.
  * @param[in] key The configuration key (SR_CONF_*).
@@ -822,6 +831,10 @@ SR_API int sr_config_list(const struct sr_dev_driver *driver,
 	else if (key != SR_CONF_SCAN_OPTIONS && key != SR_CONF_DEVICE_OPTIONS) {
 		if (check_key(driver, sdi, cg, key, SR_CONF_LIST, NULL) != SR_OK)
 			return SR_ERR_ARG;
+	}
+	if (sdi && !sdi->priv) {
+		sr_err("Can't list config (sdi != NULL, sdi->priv == NULL).");
+		return SR_ERR;
 	}
 	if ((ret = driver->config_list(key, data, sdi, cg)) == SR_OK) {
 		log_key(sdi, cg, key, SR_CONF_LIST, *data);

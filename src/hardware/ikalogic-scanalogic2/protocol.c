@@ -20,8 +20,6 @@
 #include <config.h>
 #include "protocol.h"
 
-extern struct sr_dev_driver ikalogic_scanalogic2_driver_info;
-
 extern uint64_t sl2_samplerates[NUM_SAMPLERATES];
 
 static void stop_acquisition(struct sr_dev_inst *sdi)
@@ -30,7 +28,7 @@ static void stop_acquisition(struct sr_dev_inst *sdi)
 
 	usb_source_remove(sdi->session, drvc->sr_ctx);
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	sdi->status = SR_ST_ACTIVE;
 }
@@ -41,7 +39,7 @@ static void abort_acquisition(struct sr_dev_inst *sdi)
 
 	usb_source_remove(sdi->session, drvc->sr_ctx);
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	sdi->driver->dev_close(sdi);
 }
@@ -627,14 +625,14 @@ SR_PRIV void sl2_calculate_trigger_samples(const struct sr_dev_inst *sdi)
 	devc->post_trigger_bytes = post_trigger_bytes;
 }
 
-SR_PRIV int sl2_get_device_info(struct sr_usb_dev_inst usb,
-		struct device_info *dev_info)
+SR_PRIV int sl2_get_device_info(struct sr_dev_driver *di,
+		struct sr_usb_dev_inst usb, struct device_info *dev_info)
 {
 	struct drv_context *drvc;
 	uint8_t buffer[PACKET_LENGTH];
 	int ret;
 
-	drvc = ikalogic_scanalogic2_driver_info.context;
+	drvc = di->context;
 
 	if (!dev_info)
 		return SR_ERR_ARG;

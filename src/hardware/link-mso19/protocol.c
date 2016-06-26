@@ -30,8 +30,6 @@
 static const char mso_head[] = { 0x40, 0x4c, 0x44, 0x53, 0x7e };
 static const char mso_foot[] = { 0x7e };
 
-extern SR_PRIV struct sr_dev_driver link_mso19_driver_info;
-
 SR_PRIV int mso_send_control_message(struct sr_serial_dev_inst *serial,
 				     uint16_t payload[], int n)
 {
@@ -291,7 +289,7 @@ SR_PRIV void stop_acquisition(const struct sr_dev_inst *sdi)
 	devc = sdi->priv;
 	serial_source_remove(sdi->session, devc->serial);
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 }
 
 SR_PRIV int mso_clkrate_out(struct sr_serial_dev_inst *serial, uint16_t val)
@@ -351,24 +349,9 @@ SR_PRIV int mso_receive_data(int fd, int revents, void *cb_data)
 {
 	struct sr_datafeed_packet packet;
 	struct sr_datafeed_logic logic;
-	struct sr_dev_inst *sdi;
-	GSList *l;
+	struct sr_dev_inst *sdi = cb_data;
+	struct dev_context *devc = sdi->priv;
 	int i;
-
-	struct drv_context *drvc = di->context;
-
-	/* Find this device's devc struct by its fd. */
-	struct dev_context *devc = NULL;
-	for (l = drvc->instances; l; l = l->next) {
-		sdi = l->data;
-		devc = sdi->priv;
-		if (devc->serial->fd == fd)
-			break;
-		devc = NULL;
-	}
-	if (!devc)
-		/* Shouldn't happen. */
-		return TRUE;
 
 	(void)revents;
 

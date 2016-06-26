@@ -24,15 +24,13 @@
 #include "libsigrok-internal.h"
 #include "protocol.h"
 
-SR_PRIV struct sr_dev_driver ftdi_la_driver_info;
-
 static const uint32_t scanopts[] = {
 	SR_CONF_CONN,
 };
 
 static const uint32_t devopts[] = {
 	SR_CONF_LOGIC_ANALYZER,
-	SR_CONF_CONTINUOUS | SR_CONF_SET,
+	SR_CONF_CONTINUOUS,
 	SR_CONF_LIMIT_SAMPLES | SR_CONF_SET,
 	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
 	SR_CONF_CONN | SR_CONF_GET,
@@ -84,22 +82,16 @@ static const struct ftdi_chip_desc *chip_descs[] = {
 	&ft232r_desc,
 };
 
-static int init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
-{
-	return std_init(sr_ctx, di, LOG_PREFIX);
-}
-
-static void scan_device(struct sr_dev_driver *di, struct libusb_device *dev, GSList **devices)
+static void scan_device(struct ftdi_context *ftdic,
+	struct libusb_device *dev, GSList **devices)
 {
 	struct libusb_device_descriptor usb_desc;
 	const struct ftdi_chip_desc *desc;
 	struct dev_context *devc;
 	char *vendor, *model, *serial_num;
 	struct sr_dev_inst *sdi;
-	struct drv_context *drvc;
 	int rv;
 
-	drvc = di->context;
 	libusb_get_device_descriptor(dev, &usb_desc);
 
 	desc = NULL;
@@ -122,20 +114,12 @@ static void scan_device(struct sr_dev_driver *di, struct libusb_device *dev, GSL
 	/* Allocate memory for the incoming data. */
 	devc->data_buf = g_malloc0(DATA_BUF_SIZE);
 
-	/* Allocate memory for the FTDI context (ftdic) and initialize it. */
-	devc->ftdic = ftdi_new();
-	if (!devc->ftdic) {
-		sr_err("Failed to initialize libftdi.");
-		goto err_free_data_buf;
-	}
-
-	devc->usbdev = dev;
 	devc->desc = desc;
 
 	vendor = g_malloc(32);
 	model = g_malloc(32);
 	serial_num = g_malloc(32);
-	rv = ftdi_usb_get_strings(devc->ftdic, dev, vendor, 32,
+	rv = ftdi_usb_get_strings(ftdic, dev, vendor, 32,
 			     model, 32, serial_num, 32);
 	switch (rv) {
 	case 0:
@@ -153,74 +137,63 @@ static void scan_device(struct sr_dev_driver *di, struct libusb_device *dev, GSL
 
 	/* Register the device with libsigrok. */
 	sdi = g_malloc0(sizeof(struct sr_dev_inst));
-	sdi->status = SR_ST_INITIALIZING;
+	sdi->status = SR_ST_INACTIVE;
 	sdi->vendor = vendor;
 	sdi->model = model;
 	sdi->serial_num = serial_num;
-	sdi->driver = di;
 	sdi->priv = devc;
+	sdi->connection_id = g_strdup_printf("d:%u/%u",
+		libusb_get_bus_number(dev), libusb_get_device_address(dev));
 
 	for (char *const *chan = &(desc->channel_names[0]); *chan; chan++)
 		sr_channel_new(sdi, chan - &(desc->channel_names[0]),
 				SR_CHANNEL_LOGIC, TRUE, *chan);
 
 	*devices = g_slist_append(*devices, sdi);
-	drvc->instances = g_slist_append(drvc->instances, sdi);
 	return;
 
 err_free_strings:
 	g_free(vendor);
 	g_free(model);
 	g_free(serial_num);
-err_free_data_buf:
 	g_free(devc->data_buf);
 	g_free(devc);
 }
 
-static GSList *scan_all(struct sr_dev_driver *di, GSList *options)
+static GSList *scan_all(struct ftdi_context *ftdic, GSList *options)
 {
 	GSList *devices;
 	struct ftdi_device_list *devlist = 0;
 	struct ftdi_device_list *curdev;
-	struct ftdi_context *ftdic;
 	int ret;
 
 	(void)options;
 
 	devices = NULL;
 
-	/* Allocate memory for the FTDI context (ftdic) and initialize it. */
-	ftdic = ftdi_new();
-	if (!ftdic) {
-		sr_err("Failed to initialize libftdi.");
-		return NULL;
-	}
-
 	ret = ftdi_usb_find_all(ftdic, &devlist, 0, 0);
 	if (ret < 0) {
 		sr_err("Failed to list devices (%d): %s", ret,
 		       ftdi_get_error_string(ftdic));
-		goto err_free_ftdic;
+		return NULL;
 	}
 
 	sr_dbg("Number of FTDI devices found: %d", ret);
 
 	curdev = devlist;
 	while (curdev) {
-		scan_device(di, curdev->dev, &devices);
+		scan_device(ftdic, curdev->dev, &devices);
 		curdev = curdev->next;
 	}
 
+	ftdi_list_free(&devlist);
+
 	return devices;
-
-err_free_ftdic:
-	ftdi_free(ftdic); /* NOT free() or g_free()! */
-
-	return NULL;
 }
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
+	struct ftdi_context *ftdic;
 	struct sr_config *src;
 	struct sr_usb_dev_inst *usb;
 	const char *conn;
@@ -231,7 +204,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 	int i;
 
 	drvc = di->context;
-	drvc->instances = NULL;
 	conn = NULL;
 	for (l = options; l; l = l->next) {
 		src = l->data;
@@ -240,6 +212,14 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 			break;
 		}
 	}
+
+	/* Allocate memory for the FTDI context (ftdic) and initialize it. */
+	ftdic = ftdi_new();
+	if (!ftdic) {
+		sr_err("Failed to initialize libftdi.");
+		return NULL;
+	}
+
 	if (conn) {
 		devices = NULL;
 		libusb_get_device_list(drvc->sr_ctx->libusb_ctx, &devlist);
@@ -249,19 +229,17 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 				usb = l->data;
 				if (usb->bus == libusb_get_bus_number(devlist[i])
 					&& usb->address == libusb_get_device_address(devlist[i])) {
-					scan_device(di, devlist[i], &devices);
+					scan_device(ftdic, devlist[i], &devices);
 				}
 			}
 		}
 		libusb_free_device_list(devlist, 1);
-		return devices;
 	} else
-		return scan_all(di, options);
-}
+		devices = scan_all(ftdic, options);
 
-static GSList *dev_list(const struct sr_dev_driver *di)
-{
-	return ((struct drv_context *)(di->context))->instances;
+	ftdi_free(ftdic);
+
+	return std_scan_complete(di, devices);
 }
 
 static void clear_helper(void *priv)
@@ -269,8 +247,6 @@ static void clear_helper(void *priv)
 	struct dev_context *devc;
 
 	devc = priv;
-
-	ftdi_free(devc->ftdic);
 	g_free(devc->data_buf);
 	g_free(devc);
 }
@@ -287,13 +263,17 @@ static int dev_open(struct sr_dev_inst *sdi)
 
 	devc = sdi->priv;
 
-	ret = ftdi_usb_open_dev(devc->ftdic, devc->usbdev);
+	devc->ftdic = ftdi_new();
+	if (!devc->ftdic)
+		return SR_ERR;
+
+	ret = ftdi_usb_open_string(devc->ftdic, sdi->connection_id);
 	if (ret < 0) {
 		/* Log errors, except for -3 ("device not found"). */
 		if (ret != -3)
 			sr_err("Failed to open device (%d): %s", ret,
 			       ftdi_get_error_string(devc->ftdic));
-		return SR_ERR;
+		goto err_ftdi_free;
 	}
 
 	/* Purge RX/TX buffers in the FTDI chip. */
@@ -325,9 +305,10 @@ static int dev_open(struct sr_dev_inst *sdi)
 	sdi->status = SR_ST_ACTIVE;
 
 	return SR_OK;
-
 err_dev_open_close_ftdic:
 	ftdi_usb_close(devc->ftdic);
+err_ftdi_free:
+	ftdi_free(devc->ftdic);
 	return SR_ERR;
 }
 
@@ -337,18 +318,13 @@ static int dev_close(struct sr_dev_inst *sdi)
 
 	devc = sdi->priv;
 
-	ftdi_usb_close(devc->ftdic);
+	if (devc->ftdic) {
+		ftdi_usb_close(devc->ftdic);
+		ftdi_free(devc->ftdic);
+		devc->ftdic = NULL;
+	}
 
 	sdi->status = SR_ST_INACTIVE;
-
-	return SR_OK;
-}
-
-static int cleanup(const struct sr_dev_driver *di)
-{
-	dev_clear(di);
-
-	/* TODO: Free other driver resources, if any. */
 
 	return SR_OK;
 }
@@ -475,7 +451,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 	devc->samples_sent = 0;
 	devc->bytes_received = 0;
 
-	std_session_send_df_header(sdi, LOG_PREFIX);
+	std_session_send_df_header(sdi);
 
 	/* Hook up a dummy handler to receive data from the device. */
 	sr_session_source_add(sdi->session, -1, G_IO_IN, 0,
@@ -492,19 +468,19 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 	sr_dbg("Stopping acquisition.");
 	sr_session_source_remove(sdi->session, -1);
 
-	std_session_send_df_end(sdi, LOG_PREFIX);
+	std_session_send_df_end(sdi);
 
 	return SR_OK;
 }
 
-SR_PRIV struct sr_dev_driver ftdi_la_driver_info = {
+static struct sr_dev_driver ftdi_la_driver_info = {
 	.name = "ftdi-la",
 	.longname = "FTDI LA",
 	.api_version = 1,
-	.init = init,
-	.cleanup = cleanup,
+	.init = std_init,
+	.cleanup = std_cleanup,
 	.scan = scan,
-	.dev_list = dev_list,
+	.dev_list = std_dev_list,
 	.dev_clear = dev_clear,
 	.config_get = config_get,
 	.config_set = config_set,
@@ -515,3 +491,4 @@ SR_PRIV struct sr_dev_driver ftdi_la_driver_info = {
 	.dev_acquisition_stop = dev_acquisition_stop,
 	.context = NULL,
 };
+SR_REGISTER_DEV_DRIVER(ftdi_la_driver_info);
