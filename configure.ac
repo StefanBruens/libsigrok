@@ -186,15 +186,9 @@ AS_CASE([$host_os], [mingw*], [SR_PREPEND([SR_EXTRA_LIBS], [-lws2_32])])
 SR_SEARCH_LIBS([SR_EXTRA_LIBS], [pow], [m])
 
 # RPC is only needed for VXI support.
-AC_CACHE_CHECK([for RPC support], [sr_cv_have_rpc],
-	[AC_LINK_IFELSE([AC_LANG_PROGRAM(
-			[[#include <rpc/rpc.h>]m4_newline[CLIENT *rpc_test(void);]],
-			[[(void) clnt_create("", 0, 0, "");]])],
-		[sr_cv_have_rpc=yes], [sr_cv_have_rpc=no])])
-AS_IF([test "x$sr_cv_have_rpc" = xyes],
-	[AC_DEFINE([HAVE_RPC], [1], [Specifies whether we have RPC support.])])
+SR_ARG_OPT_PKG([rpc], [RPC], , [libtirpc])
 # VXI support is only compiled if RPC support was found.
-AM_CONDITIONAL([NEED_RPC], [test "x$sr_cv_have_rpc" = xyes])
+AM_CONDITIONAL([NEED_RPC], [test "x$sr_have_rpc" = xyes])
 
 # Check for compiler support of 128 bit integers
 AC_CHECK_TYPES([__int128_t, __uint128_t], [], [], [])
@@ -644,7 +638,7 @@ Enabled serial communication transports:
 
 Enabled SCPI backends:
  - TCP............................. yes
- - RPC............................. $sr_cv_have_rpc
+ - RPC/VXI11....................... $sr_have_rpc
  - serial.......................... $sr_have_serial_comm
  - VISA............................ $sr_have_librevisa
  - GPIB............................ $sr_have_libgpib
